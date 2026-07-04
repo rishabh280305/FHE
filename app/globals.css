@@ -78,6 +78,14 @@ select {
   box-shadow: 4px 4px 0 rgba(17, 17, 17, 0.9), 0 0 0 4px rgba(38, 240, 255, 0.18);
 }
 
+.field-label {
+  display: grid;
+  gap: 0.5rem;
+  color: rgba(17, 17, 17, 0.74);
+  font-size: 0.875rem;
+  font-weight: 800;
+}
+
 .glass-card::before {
   content: "";
   pointer-events: none;

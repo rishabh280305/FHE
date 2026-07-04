@@ -1,240 +1,395 @@
 # CipherPulse
 
-Confidential analytics for encrypted Web3 signals.
+Transparent protocol analytics with private aggregate snapshots.
 
-Live URL: https://cipherpulse-psi.vercel.app
+CipherPulse gives Web3 protocols, DAOs, and on-chain communities a shared analytics dashboard for community health, governance sentiment, activity, cohort participation, risk pressure, and whale influence without exposing raw wallet-level private signals.
 
-CipherPulse helps protocols aggregate wallet, DAO, cohort, risk, and KPI signals without exposing raw user-level data. The production frontend is an end-user analytics app prepared for a live Ethereum Sepolia Fhenix/CoFHE contract.
-
-## Current Status
-
-- Frontend: deployed on Vercel
-- Target network: Ethereum Sepolia
-- Chain ID: `11155111`
-- RPC: `https://ethereum-sepolia-rpc.publicnode.com`
-- Explorer: `https://sepolia.etherscan.io`
-- Deployer: `0xc6F268f7E74823B2e485fb6b45DC8F2D8E7192B1`
+- Live app: https://cipherpulse-psi.vercel.app
+- Interactive simulator: https://cipherpulse-psi.vercel.app/simulator
+- Network target: Ethereum Sepolia
 - Contract: `0x8C9244E7f745328476639152E0bbFd41d46797e9`
-- Deployment tx: `0x93ead23f540265abded09e9892d8e69187a626f54386df76ad44fba50b6c7978`
-- Test encrypted signal tx: `0x04c0b98c4dd44abf1e6688662937b402e06a683c7edf5a1b56a54f7f83ee1cac`
-- Authorized reveal request tx: `0xb28e1ac9976ac51e6bfea125c2eb5c208306dc4a34372b444e2640c70debd23b`
-- Explorer: `https://sepolia.etherscan.io/address/0x8C9244E7f745328476639152E0bbFd41d46797e9`
-- Production simulation: not shown
-- Contract tooling: separated in `contracts-package/`
 
-The live app uses Ethereum Sepolia contract mode when these Vercel production env vars are configured:
+## Problem
 
-- `NEXT_PUBLIC_CONTRACT_ADDRESS`
-- `NEXT_PUBLIC_RPC_URL`
-- `NEXT_PUBLIC_CHAIN_ID`
+Web3 protocols need analytics to understand their communities, but analytics can easily become surveillance.
+
+Protocols want to know:
+
+- whether community health is improving
+- whether governance sentiment is positive or negative
+- whether contributors and delegates are active
+- whether whales are dominating participation
+- whether risk or sybil pressure is rising
+- whether confidential KPIs crossed warning thresholds
+
+The sensitive part is that many of these signals can reveal private wallet behavior, voting preferences, risk scores, sentiment, balances, or strategy. Publishing raw wallet-level data harms users and discourages honest participation.
+
+## Solution
+
+CipherPulse is a public-facing transparency dashboard that separates analytics into two paths:
+
+1. Public analytics stay public and cheap.
+2. Sensitive analytics are encrypted, aggregated, and released only as aggregate snapshots.
+
+Everyone sees the same dashboard:
+
+- protocol teams
+- DAO members
+- token holders
+- contributors
+- delegates
+- users
+- partners
+
+CipherPulse is not a private admin console. It is a shared community transparency layer.
 
 ## Product Experience
 
-The app is organized around one sticky top navigation:
+The dashboard shows:
 
-- Overview
-- Dashboard
-- Submit
-- Cohorts
-- Alerts
-- Security
-- Protocol
+- Community Health
+- Governance Sentiment
+- Activity Trend
+- Active Wallets
+- Transaction Count
+- Proposal Count
+- Public Participation
+- Whale Influence
+- Risk Pressure
+- Confidential Alert Status
+- Cohort Participation
+- Risk Distribution
 
-There is no wallet-level raw data table. Dashboard values appear only from contract-backed aggregate reads or authorized reveal results.
+The simulator lets users tune the underlying aggregate signals and see the analytics update in real time. It also shows ciphertext handles to make the privacy model visible.
 
-## Live Mode
+## Why FHE
 
-Live mode requires:
+Fully Homomorphic Encryption is useful when a protocol needs computation over sensitive values without revealing those values.
 
-- deployed `CipherPulseAnalytics.sol`
-- connected wallet on Ethereum Sepolia
-- Vercel public env vars for contract address, RPC URL, and chain ID
-- browser-side CoFHE adapter availability
+CipherPulse uses FHE for private aggregate signals such as:
 
-If contract env vars are missing, transaction controls stay disabled and the dashboard remains empty.
+- private governance sentiment
+- private risk pressure
+- whale influence scoring
+- sybil/risk bucket aggregation
+- confidential KPI threshold alerts
+- private cohort confidence
 
-## Fhenix / CoFHE Usage
+CipherPulse does not use FHE for public metrics such as:
 
-Contract source:
+- transaction count
+- proposal count
+- active addresses
+- public votes
+- public volume
+- public contract interactions
+
+This keeps the product realistic. FHE is reserved for the parts of analytics that actually need privacy.
+
+## Architecture
+
+```text
+Public analytics path
+  Public on-chain data
+    -> RPC / indexer / analytics API
+    -> frequently updated dashboard metrics
+
+Private analytics path
+  Sensitive community signals
+    -> browser-side or relayer encryption
+    -> encrypted smart contract submission
+    -> encrypted aggregate counters
+    -> authorized daily / weekly reveal
+    -> cached aggregate snapshot
+    -> shared dashboard for all users
+```
+
+## Snapshot Model
+
+CipherPulse is designed around daily or weekly private snapshots.
+
+Instead of decrypting on every page view:
+
+- private signals are batched
+- encrypted counters are updated
+- authorized reveal happens on a schedule
+- one aggregate snapshot is cached
+- all users read the same snapshot
+
+This makes the cost model much more practical than per-user or per-click FHE.
+
+## Tech Stack
+
+### Frontend
+
+- Next.js App Router
+- React
+- TypeScript
+- Tailwind CSS
+- ethers v6
+- pure CSS chart components
+- Vercel deployment
+
+The frontend intentionally avoids heavy infrastructure:
+
+- no database
+- no backend API server
+- no Prisma
+- no Supabase
+- no Docker
+- no RainbowKit
+- no heavy charting library
+
+### Smart Contracts
+
+- Solidity
+- Hardhat
+- Fhenix / CoFHE-compatible contract primitives
+- Ethereum Sepolia deployment target
+
+Main contract:
 
 ```text
 contracts/CipherPulseAnalytics.sol
 ```
 
-The contract uses:
+### Contract Tooling
 
-- encrypted input types: `InEuint8`, `InEuint32`, `InEbool`
-- encrypted state types: `euint8`, `euint32`, `ebool`
-- encrypted aggregation with `FHE.add`
-- encrypted thresholding with `FHE.gte`
-- encrypted conditional selection with `FHE.select`
-- permissioning with `FHE.allowThis` and `FHE.allowSender`
-- analyst-gated reveal handles
-
-Events emit metadata and encrypted handles, not raw private values.
-
-## Frontend Adapter
-
-Frontend adapter:
-
-```text
-lib/fhenixClient.ts
-```
-
-It exposes:
-
-- `getRuntimeStatus()`
-- `getLiveModeStatus()`
-- `connectWallet()`
-- `encryptAndSubmitSignal()`
-- `seedEncryptedSignals()`
-- `refreshLiveAnalytics({ autoReveal: true })`
-- `readLiveAggregates()`
-- `requestAuthorizedReveal()`
-- `readRevealedDashboardMetrics()`
-
-The frontend dynamically loads the CoFHE browser SDK path at runtime. Hardhat and CoFHE contract tooling are not installed in the root frontend package.
-
-The production frontend includes `@cofhe/sdk` so TFHE WebAssembly assets are served by the Vercel build instead of a third-party ESM CDN. This avoids the browser-side `Failed to initialize TFHE` WebAssembly fetch error.
-
-## Live Analytics Diagnostics
-
-The dashboard now reports why numbers are not visible:
-
-- contract not configured
-- contract connected, no submissions yet
-- transaction pending or confirmed
-- encrypted aggregate updated
-- authorized wallet connected; reveal can be requested
-- reveal transaction confirmed; waiting for CoFHE decrypt result
-- aggregate revealed
-- read failed with the underlying error
-- wallet not authorized
-
-Reveal buttons are exposed for aggregate, cohort, DAO pulse, and alert status. When the connected wallet is the owner or an analyst, the app now attempts authorized reveal automatically during refresh after connect and after submissions. Plaintext aggregate values appear only after the CoFHE decrypt/unseal path returns values; until then cards show encrypted handle readiness and the exact pending state instead of generated numbers.
-
-## Live Analytics Seeding
-
-The production UI includes a `Seed Live Analytics` panel for the protocol owner/analyst wallet:
-
-- submits 30 real encrypted signal records to Ethereum Sepolia
-- uses one wallet as the protocol relayer
-- represents private analytics events, not unique wallet identities
-- stores only transaction hashes/progress in the UI
-- displays aggregate outputs only
-- never renders raw individual seed rows
-- never displays raw seed values
-
-The same flow is available from the separated contract package when `PRIVATE_KEY` is provided as a process environment variable:
-
-```bash
-npm --prefix contracts-package run seed:sepolia
-```
-
-Do not place `PRIVATE_KEY` in frontend env vars and do not commit it.
-
-## Reveal Behavior
-
-Aggregates stay encrypted until authorized reveal/decrypt succeeds. The frontend now:
-
-- checks whether the connected wallet is `owner` or `analysts(address)`
-- requests reveal automatically when `refreshLiveAnalytics({ autoReveal: true })` is used
-- attempts SDK `decryptForView` with the active/self permit path
-- falls back to contract `getDecryptResultSafe` when CoFHE has published a decrypt result
-- reports the precise blocker when plaintext is not yet available
-
-If the connected wallet lacks the analyst role, the dashboard shows that the encrypted aggregate exists and asks for the owner/analyst wallet. If CoFHE decrypt publication or SDK unseal is still pending, the dashboard remains honest and does not show fake aggregate numbers.
-
-## Contract Tooling
-
-Contract tooling is isolated in:
+Contract tooling is isolated from the frontend in:
 
 ```text
 contracts-package/
 ```
 
-Ethereum Sepolia deployment env vars:
+This keeps the Vercel frontend build lightweight while preserving the full smart contract implementation and deployment scripts.
 
-```bash
-PRIVATE_KEY=
-ETHEREUM_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+## Fhenix / CoFHE Usage
+
+The contract uses encrypted input and state types:
+
+- `InEuint32`
+- `InEuint8`
+- `InEbool`
+- `euint32`
+- `euint8`
+- `ebool`
+
+The contract uses FHE operations:
+
+- `FHE.add` for encrypted counters
+- `FHE.gte` for encrypted threshold checks
+- `FHE.select` for encrypted conditional aggregation
+- `FHE.allowThis` for contract permissions
+- `FHE.allowSender` for sender permissions
+
+The contract supports:
+
+- encrypted signal submission
+- encrypted activity aggregation
+- encrypted governance sentiment aggregation
+- encrypted cohort metrics
+- encrypted risk buckets
+- confidential KPI threshold checks
+- authorized aggregate reveal
+- encrypted handle reads
+
+Events emit metadata and ciphertext handles only. They do not emit raw private values.
+
+## Frontend FHE Adapter
+
+The frontend Fhenix adapter lives in:
+
+```text
+lib/fhenixClient.ts
 ```
 
-Deployment command:
+It handles:
 
-```bash
-npm --prefix contracts-package run deploy:sepolia
+- wallet connection
+- Ethereum Sepolia network switching
+- dynamic CoFHE SDK loading
+- encrypted signal submission
+- contract reads
+- authorized reveal requests
+- live runtime status
+
+The adapter is loaded safely so the app can build and deploy on Vercel without server-side wallet or browser API crashes.
+
+## Simulator
+
+The simulator is available at:
+
+```text
+/simulator
 ```
 
-Live seed command:
+It lets users control:
 
-```bash
-npm --prefix contracts-package run seed:sepolia
+- encrypted signal count
+- active wallets
+- transaction count
+- proposal count
+- support / against / abstain signals
+- low / medium / high risk buckets
+- Contributors / Delegates / Whales / New Users
+- whale influence weight
+- aggregate activity volume
+- confidential KPI alerts
+
+The simulator updates analytics in real time and writes a shared aggregate snapshot to browser storage. The main dashboard reads that same snapshot, so changes made in the simulator are reflected in the product dashboard.
+
+The simulator demonstrates the privacy flow:
+
+```text
+Private input
+  -> browser encryption / ciphertext handle
+  -> aggregate counter update
+  -> dashboard chart update
+  -> no raw signal table
 ```
 
-Never commit private keys.
+## Privacy Guarantees
 
-## Troubleshooting
+CipherPulse does not show:
 
-- Wrong network: switch wallet to Ethereum Sepolia, chain ID `11155111`.
-- Contract address: verify `NEXT_PUBLIC_CONTRACT_ADDRESS` is `0x8C9244E7f745328476639152E0bbFd41d46797e9`.
-- Empty analytics: submit or seed encrypted records, then refresh analytics.
-- Reveal pending: connect the owner/analyst wallet and request/auto-request reveal.
-- Plaintext numbers hidden: CoFHE decrypt/unseal is still pending or unavailable in the browser session.
-- Public RPC log limits: the app falls back to encrypted handle reads when event log queries are blocked.
-- Sepolia verification: inspect transactions at `https://sepolia.etherscan.io/address/0x8C9244E7f745328476639152E0bbFd41d46797e9`.
+- wallet-level rows
+- individual votes
+- raw risk scores
+- raw private sentiment
+- raw private cohort records
+- raw seed tables
 
-## Vercel Env Setup
+CipherPulse shows:
 
-After contract deployment:
+- aggregate metrics
+- aggregate buckets
+- cohort-level totals
+- ciphertext handles
+- public analytics
+- private snapshot outputs
+
+The goal is transparency without surveillance.
+
+## Cost Model
+
+A naive FHE analytics system would be expensive because every user action, dashboard refresh, or page view could trigger encrypted computation or reveal.
+
+CipherPulse uses a lower-cost model:
+
+- public metrics use normal reads
+- sensitive signals are batched
+- encrypted state stores counters only
+- reveal happens daily or weekly
+- all users read the same cached snapshot
+- cost scales with batch count and reveal frequency
+
+Cost formula:
+
+```text
+privateSignalsPerWeek =
+  users * privateSignalsPerUserPerWeek
+
+batchedTxPerWeek =
+  ceil(privateSignalsPerWeek / batchSize)
+
+submitCost =
+  batchedTxPerWeek * avgSubmitGas * gasPrice * tokenPrice
+
+revealCost =
+  snapshotFrequencyPerWeek * avgRevealGas * gasPrice * tokenPrice
+
+totalCost =
+  submitCost + revealCost + optionalCoFHETaskCost
+
+costPerUser =
+  totalCost / users
+```
+
+Actual cost depends on:
+
+- chain
+- gas price
+- batch size
+- snapshot frequency
+- measured contract gas
+- Fhenix / CoFHE task pricing
+- relayer strategy
+
+## Repository Structure
+
+```text
+app/                     Next.js app routes
+app/simulator/           Interactive analytics simulator
+lib/                     Types, Fhenix adapter, simulator state
+contracts/               CipherPulseAnalytics.sol
+contracts-package/       Hardhat + Fhenix contract tooling
+public/                  Static assets
+README.md                Project documentation
+```
+
+## Environment Variables
+
+Frontend live mode uses public environment variables:
+
+```text
+NEXT_PUBLIC_CONTRACT_ADDRESS
+NEXT_PUBLIC_RPC_URL
+NEXT_PUBLIC_CHAIN_ID
+```
+
+Private deployment keys must never be committed and must never be exposed through `NEXT_PUBLIC_*` variables.
+
+## Local Development
 
 ```bash
-vercel env add NEXT_PUBLIC_CONTRACT_ADDRESS production
-vercel env add NEXT_PUBLIC_RPC_URL production
-vercel env add NEXT_PUBLIC_CHAIN_ID production
+npm install
+npm run dev
+```
+
+Frontend build:
+
+```bash
+npm run build
+```
+
+Contract tooling is separate:
+
+```bash
+npm --prefix contracts-package run compile
+npm --prefix contracts-package run test
+```
+
+## Deployment
+
+Frontend:
+
+```bash
 vercel --prod --yes
 ```
 
-Expected values:
+The production frontend is currently deployed at:
 
 ```text
-NEXT_PUBLIC_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-NEXT_PUBLIC_CHAIN_ID=11155111
+https://cipherpulse-psi.vercel.app
 ```
 
-## Privacy Model
+## Hackathon Fit
 
-- raw values are encrypted before submission
-- individual submissions are not displayed
-- dashboard shows aggregate insights only
-- events do not expose private values
-- authorized reveal model
-- raw wallet-level table is not available
+CipherPulse fits the FHE analytics track because it demonstrates:
 
-## Architecture
+- encrypted submissions
+- encrypted aggregate state
+- FHE-style thresholding and bucketing
+- authorized aggregate reveal
+- no raw private data leakage
+- public dashboard deployment
+- smart contract source and tooling
+- practical cost-aware FHE minimization
 
-```text
-Private Signal
-  -> Browser Encryption
-  -> Fhenix Contract
-  -> Encrypted Aggregate
-  -> Authorized Insight
-  -> Dashboard
-```
+## Pitch Summary
 
-## Walkthrough Script
+CipherPulse is a transparent protocol analytics layer for Web3 communities.
 
-1. Open https://cipherpulse-psi.vercel.app.
-2. Connect a wallet on Ethereum Sepolia.
-3. Submit an encrypted wallet, DAO, risk, cohort, and KPI signal.
-4. Show the real transaction hash and contract status.
-5. Show that dashboard data is aggregate-only.
-6. Show Security: no individual submissions or raw wallet table.
-7. Show Protocol: contract address, network, adapter status, and CoFHE operations.
+It lets every user see community health, governance sentiment, activity, risk pressure, and whale influence while keeping sensitive signals encrypted and aggregate-only.
 
-## Submission Links
-
-- Live Vercel URL: https://cipherpulse-psi.vercel.app
-- GitHub Repository: TBD
-- Video: TBD
-- Pitch Deck: TBD
+Public metrics stay cheap. Private metrics use Fhenix-compatible encrypted compute. The result is useful analytics without wallet-level surveillance.

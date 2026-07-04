@@ -1,4 +1,4 @@
-export const cohorts = ["Builders", "Whales", "Delegates", "New Users"] as const;
+export const cohorts = ["Contributors", "Delegates", "Whales", "New Users"] as const;
 
 export type Cohort = (typeof cohorts)[number];
 export type HealthStatus = "Green" | "Amber" | "Red";

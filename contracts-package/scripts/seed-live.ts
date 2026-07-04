@@ -15,7 +15,7 @@ const abi = [
   `function submitFullSignal(${encryptedInputTuple} encryptedActivity, ${encryptedInputTuple} encryptedRisk, ${encryptedInputTuple} encryptedVoteOrSentiment, ${encryptedInputTuple} encryptedKpi, uint8 cohort, uint32 publicAlertThreshold) external`
 ];
 
-const cohorts = ["Builders", "Whales", "Delegates", "New Users"] as const;
+const cohorts = ["Contributors", "Delegates", "Whales", "New Users"] as const;
 type Cohort = (typeof cohorts)[number];
 
 type SeedSignal = {
@@ -28,16 +28,16 @@ type SeedSignal = {
 
 function seedSignalAt(index: number): SeedSignal {
   const cohortPlan: Cohort[] = [
-    ...Array<Cohort>(10).fill("Builders"),
-    ...Array<Cohort>(6).fill("Whales"),
+    ...Array<Cohort>(10).fill("Contributors"),
     ...Array<Cohort>(7).fill("Delegates"),
+    ...Array<Cohort>(6).fill("Whales"),
     ...Array<Cohort>(7).fill("New Users")
   ];
   const cohort = cohortPlan[index % cohortPlan.length];
   const isPositive = index % 3 !== 0;
   const highRisk = index % 5 === 0 || index % 11 === 0;
   const mediumRisk = index % 4 === 0;
-  const activityBase = cohort === "Whales" ? 860 : cohort === "Builders" ? 520 : cohort === "Delegates" ? 360 : 180;
+  const activityBase = cohort === "Whales" ? 860 : cohort === "Contributors" ? 520 : cohort === "Delegates" ? 360 : 180;
 
   return {
     cohort,

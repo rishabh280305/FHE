@@ -2,18 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { connectWallet, encryptAndSubmitSignal, getRuntimeStatus, readAggregateMetrics, refreshLiveAnalytics, requestAuthorizedReveal, seedEncryptedSignals } from "@/lib/fhenixClient";
-import type { Cohort, LiveAnalyticsRead, NetworkStatus, SeedProgress, SignalFormValues, WalletState } from "@/lib/types";
+import Link from "next/link";
+import {
+  connectWallet,
+  getRuntimeStatus,
+  readAggregateMetrics,
+  refreshLiveAnalytics
+} from "@/lib/fhenixClient";
+import { defaultSimulatorAggregate, readStoredSimulatorAggregate, SIMULATOR_STORAGE_KEY, toDashboardSeed } from "@/lib/simulatorState";
+import type { SimulatorAggregate } from "@/lib/simulatorState";
+import type { Cohort, LiveAnalyticsRead, NetworkStatus, WalletState } from "@/lib/types";
 import { cohorts } from "@/lib/types";
 
 const navItems = [
   ["overview", "Overview"],
-  ["dashboard", "Dashboard"],
-  ["submit", "Submit"],
-  ["cohorts", "Cohorts"],
-  ["alerts", "Alerts"],
-  ["security", "Security"],
-  ["protocol", "Protocol"]
+  ["community-health", "Community Health"],
+  ["governance-pulse", "Governance Pulse"],
+  ["activity-cohorts", "Activity & Cohorts"],
+  ["risk-influence", "Risk & Influence"]
 ] as const;
 
 const emptyRuntime: NetworkStatus = {
@@ -25,31 +31,13 @@ const emptyRuntime: NetworkStatus = {
   liveReady: false,
   statusText: "Contract pending deployment",
   networkLabel: "Ethereum Sepolia target",
-  message: "Live contract is pending deployment. Once configured, CipherPulse will stream encrypted aggregate analytics from Ethereum Sepolia."
-};
-
-const defaultSignal: SignalFormValues = {
-  cohort: "Builders",
-  activityAmount: 100,
-  riskScore: 25,
-  daoVote: "yes",
-  kpiValue: 50
-};
-
-const emptySeedProgress: SeedProgress = {
-  phase: "idle",
-  current: 0,
-  total: 30,
-  successful: 0,
-  failed: 0,
-  message: "Ready to seed live encrypted analytics.",
-  txHashes: []
+  message: "Live contract is pending deployment. Private snapshots will read from Ethereum Sepolia after configuration."
 };
 
 const emptyLiveRead: LiveAnalyticsRead = {
   contractConnected: false,
   latestReadStatus: "Contract not configured",
-  latestRevealStatus: "No reveal requested yet",
+  latestRevealStatus: "No private snapshot requested yet",
   submissionCount: 0,
   encryptedAggregateExists: false,
   authorizedRevealRequired: false,
@@ -61,10 +49,12 @@ const emptyLiveRead: LiveAnalyticsRead = {
     "Risk alerts",
     "Alert status",
     "Health score"
-  ].map((label) => ({ label, value: "Contract not configured", status: "not-configured" })),
-  cohortStatus: Object.fromEntries(cohorts.map((cohort) => [cohort, "Contract not configured"])) as Record<Cohort, string>,
+  ].map((label) => ({ label, value: "Private snapshot pending", status: "not-configured" })),
+  cohortStatus: Object.fromEntries(cohorts.map((cohort) => [cohort, "Private snapshot pending"])) as Record<Cohort, string>,
   handles: {}
 };
+
+type SourceKind = "Public" | "Private FHE Snapshot" | "Mixed";
 
 export default function Home() {
   const [activeSection, setActiveSection] = useState("overview");
@@ -72,13 +62,7 @@ export default function Home() {
   const [wallet, setWallet] = useState<WalletState>({ connected: false });
   const [runtime, setRuntime] = useState<NetworkStatus>(emptyRuntime);
   const [liveRead, setLiveRead] = useState<LiveAnalyticsRead>(emptyLiveRead);
-  const [signal, setSignal] = useState<SignalFormValues>(defaultSignal);
-  const [submitState, setSubmitState] = useState<"idle" | "pending" | "confirmed" | "failed">("idle");
-  const [submitMessage, setSubmitMessage] = useState("Connect wallet to submit encrypted signal.");
-  const [revealState, setRevealState] = useState<"idle" | "pending" | "confirmed" | "failed">("idle");
-  const [revealMessage, setRevealMessage] = useState("Authorized reveal has not been requested yet.");
-  const [latestTx, setLatestTx] = useState<string | undefined>();
-  const [seedProgress, setSeedProgress] = useState<SeedProgress>(emptySeedProgress);
+  const [simAggregate, setSimAggregate] = useState<SimulatorAggregate>(defaultSimulatorAggregate);
 
   useEffect(() => {
     void refreshRuntime(wallet);
@@ -90,9 +74,7 @@ export default function Home() {
       let current: string = navItems[0][0];
       for (const [id] of navItems) {
         const element = document.getElementById(id);
-        if (element && element.getBoundingClientRect().top <= offset) {
-          current = id;
-        }
+        if (element && element.getBoundingClientRect().top <= offset) current = id;
       }
       setActiveSection(current);
     };
@@ -106,39 +88,31 @@ export default function Home() {
     };
   }, []);
 
-  const dashboardReady = liveRead.contractConnected;
-  const wrongNetwork = Boolean(wallet.connected && runtime.expectedChainId && wallet.chainId && wallet.chainId !== runtime.expectedChainId);
-  const submitDisabled = submitState === "pending" || !runtime.liveReady;
-  const submitHint = useMemo(() => {
-    if (!wallet.connected) return "Connect wallet first.";
-    if (!runtime.contractConfigured) return "Contract pending deployment.";
-    if (wrongNetwork) return "Switch wallet to Ethereum Sepolia.";
-    if (!runtime.fhenixSdkLoaded) return "Fhenix browser adapter is loading or unavailable.";
-    return runtime.message;
-  }, [runtime.contractConfigured, runtime.fhenixSdkLoaded, runtime.message, wallet.connected, wrongNetwork]);
-  const submitButtonLabel = useMemo(() => {
-    if (submitState === "pending") return "Submitting...";
-    if (!wallet.connected) return "Connect wallet first";
-    if (!runtime.contractConfigured) return "Contract pending deployment";
-    if (wrongNetwork) return "Switch to Ethereum Sepolia";
-    if (!runtime.fhenixSdkLoaded) return "Adapter pending";
-    return "Submit encrypted signal";
-  }, [runtime.contractConfigured, runtime.fhenixSdkLoaded, submitState, wallet.connected, wrongNetwork]);
+  useEffect(() => {
+    const syncSimulator = () => setSimAggregate(readStoredSimulatorAggregate());
+    syncSimulator();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === SIMULATOR_STORAGE_KEY) syncSimulator();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", syncSimulator);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", syncSimulator);
+    };
+  }, []);
+
+  const dashboardSeed = useMemo(() => toDashboardSeed(simAggregate), [simAggregate]);
+  const snapshot = useMemo(() => buildSnapshot(liveRead, dashboardSeed), [liveRead, dashboardSeed]);
 
   async function refreshRuntime(nextWallet: WalletState) {
     const nextRuntime = await getRuntimeStatus(nextWallet);
     setRuntime(nextRuntime);
-    setSubmitMessage(nextRuntime.contractConfigured ? nextRuntime.message : "Contract pending deployment.");
     if (nextRuntime.contractConfigured) {
       const read = nextWallet.connected ? await refreshLiveAnalytics({ autoReveal: true, wallet: nextWallet }) : await readAggregateMetrics(nextWallet);
       setLiveRead(read);
-      setRevealMessage(read.latestRevealStatus);
     } else {
-      setLiveRead({
-        ...emptyLiveRead,
-        latestReadStatus: "Contract not deployed/configured",
-        metrics: emptyLiveRead.metrics.map((metric) => ({ ...metric, value: "Contract not configured" }))
-      });
+      setLiveRead(emptyLiveRead);
     }
   }
 
@@ -155,74 +129,6 @@ export default function Home() {
     window.history.replaceState(null, "", `#${id}`);
   }
 
-  async function handleSubmit() {
-    try {
-      setSubmitState("pending");
-      setSubmitMessage("Encrypting signal and preparing transaction...");
-      const result = await encryptAndSubmitSignal(signal);
-      setLatestTx(result.txHash);
-      setSubmitState("confirmed");
-      setSubmitMessage(`Transaction confirmed: ${result.txHash}`);
-      const refreshed = await refreshLiveAnalytics({ autoReveal: true, wallet });
-      setLiveRead(refreshed);
-      setRevealMessage(refreshed.latestRevealStatus);
-    } catch (error) {
-      setSubmitState("failed");
-      setSubmitMessage((error as Error).message);
-    }
-  }
-
-  async function handleTestSignal() {
-    await handleSubmit();
-  }
-
-  async function handleSeedLiveAnalytics() {
-    try {
-      setSubmitState("pending");
-      setSubmitMessage("Seeding live encrypted records...");
-      const result = await seedEncryptedSignals(30, setSeedProgress);
-      setLatestTx(result.latestTx);
-      setSubmitState("confirmed");
-      setSubmitMessage(`Seed complete: ${result.successful}/${result.total} encrypted records confirmed.`);
-      setRevealState("pending");
-      setRevealMessage("Requesting automatic aggregate reveal...");
-      const refreshed = await refreshLiveAnalytics({ autoReveal: true, wallet });
-      setLiveRead(refreshed);
-      setRevealState(refreshed.revealAvailable ? "confirmed" : "pending");
-      setRevealMessage(refreshed.latestRevealStatus);
-    } catch (error) {
-      setSubmitState("failed");
-      setSubmitMessage((error as Error).message);
-    }
-  }
-
-  async function handleRefreshAnalytics() {
-    const refreshed = await refreshLiveAnalytics({ autoReveal: true, wallet });
-    setLiveRead(refreshed);
-    setRevealMessage(refreshed.latestRevealStatus);
-  }
-
-  function handleResetLocalSeedStatus() {
-    setSeedProgress(emptySeedProgress);
-    setSubmitState("idle");
-    setSubmitMessage(runtime.contractConfigured ? runtime.message : "Contract pending deployment.");
-  }
-
-  async function handleReveal(metric = 0, cohort = 0) {
-    try {
-      setRevealState("pending");
-      setRevealMessage("Sending authorized reveal request...");
-      const result = await requestAuthorizedReveal(metric, cohort);
-      setRevealState("confirmed");
-      setRevealMessage(`${result.message} Tx: ${result.txHash}`);
-      setLatestTx(result.txHash);
-      setLiveRead(await readAggregateMetrics(wallet));
-    } catch (error) {
-      setRevealState("failed");
-      setRevealMessage((error as Error).message);
-    }
-  }
-
   return (
     <main className="relative min-h-screen overflow-x-hidden px-4 pb-20 pt-28 text-ink sm:px-6 lg:px-10">
       <BackgroundGlow />
@@ -230,8 +136,8 @@ export default function Home() {
         activeSection={activeSection}
         mobileOpen={mobileOpen}
         onConnect={handleConnect}
-        onNavigate={handleNavigate}
         onMobileToggle={() => setMobileOpen((value) => !value)}
+        onNavigate={handleNavigate}
         runtime={runtime}
         wallet={wallet}
       />
@@ -239,212 +145,144 @@ export default function Home() {
       <div className="content-container relative z-10 space-y-10">
         <section id="overview" className="section-shell safe-grid lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
           <GlassPanel className="neo-card px-6 py-8 sm:px-8 sm:py-10">
-            <StatusLine runtime={runtime} wallet={wallet} />
-            <h1 className="mt-6 max-w-4xl text-4xl font-black leading-[1.02] tracking-tight sm:text-6xl lg:text-7xl">
-              Confidential analytics for encrypted Web3 signals.
+            <div className="inline-flex rounded-full border-[3px] border-ink bg-limepop px-4 py-2 text-xs font-black shadow-brutalSm">
+              Same dashboard for every protocol user
+            </div>
+            <h1 className="mt-6 max-w-5xl text-4xl font-black leading-[1.02] tracking-tight sm:text-6xl lg:text-7xl">
+              Transparent protocol analytics without exposing private signals.
             </h1>
-            <p className="mt-5 max-w-2xl text-base font-semibold leading-7 text-ink/72 sm:text-lg">
-              CipherPulse helps protocols aggregate wallet, DAO, cohort, risk, and KPI signals without exposing raw
-              user-level data.
+            <p className="mt-5 max-w-3xl text-base font-semibold leading-7 text-ink/72 sm:text-lg">
+              CipherPulse gives every protocol user a shared view of community health, governance sentiment, activity,
+              risk pressure, and whale influence. Public metrics stay cheap. Sensitive signals are aggregated privately
+              with Fhenix and released as daily or weekly snapshots.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
-              <button onClick={handleConnect} className="rounded-full border-[3px] border-ink bg-pinkpop px-5 py-3 text-sm font-black text-ink shadow-brutal transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none">
-                {wallet.connected ? "Wallet Connected" : "Connect Wallet"}
+              <button onClick={() => handleNavigate("community-health")} className="rounded-full border-[3px] border-ink bg-pinkpop px-5 py-3 text-sm font-black text-ink shadow-brutal transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none">
+                View community health
               </button>
-              <a href="#dashboard" className="rounded-full border-[3px] border-ink bg-cyanpop px-5 py-3 text-sm font-black shadow-brutal backdrop-blur transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none">
-                Explore Dashboard
-              </a>
-            </div>
-            <FlowStrip />
-          </GlassPanel>
-
-          <GlassPanel className="neo-card soft-grid bg-limepop/45 p-5">
-            <div className="rounded-[1.75rem] border-[3px] border-ink bg-white/78 p-5 shadow-brutal backdrop-blur">
-              <div className="mb-5 flex items-center justify-between">
-                <span className="text-sm font-black text-ink/80">Encrypted signal stream</span>
-                <span className="rounded-full border-2 border-ink bg-cyanpop px-3 py-1 text-xs font-black text-ink shadow-brutalSm">{runtime.statusText}</span>
-              </div>
-              <div className="space-y-4">
-                <MiniMetric label="Submissions" value={liveRead.metrics[0]?.value ?? liveRead.latestReadStatus} />
-                <MiniMetric label="Aggregate volume" value={liveRead.metrics[2]?.value ?? liveRead.latestReadStatus} />
-                <MiniMetric label="DAO pulse" value={liveRead.metrics[3]?.value ?? liveRead.latestReadStatus} />
-              </div>
-              <div className="mt-6 min-h-40 rounded-3xl border-[3px] border-ink bg-gradient-to-br from-cyanpop/40 via-white/78 to-pinkpop/36 p-4 shadow-brutal">
-                <EmptySparkline configured={runtime.contractConfigured} />
-              </div>
-            </div>
-          </GlassPanel>
-        </section>
-
-        <section id="dashboard" className="section-shell space-y-5">
-          <SectionHeader kicker="Dashboard" title="Encrypted analytics workspace" />
-          <ContractState liveRead={liveRead} runtime={runtime} />
-          <div className="safe-grid md:grid-cols-2 xl:grid-cols-6">
-            <Metric accent="cyan" label="Encrypted submissions" value={liveRead.metrics[0]?.value ?? liveRead.latestReadStatus} />
-            <Metric accent="pink" label="Active cohorts" value={liveRead.metrics[1]?.value ?? liveRead.latestReadStatus} />
-            <Metric accent="lime" label="Aggregate volume" value={liveRead.metrics[2]?.value ?? liveRead.latestReadStatus} />
-            <Metric accent="orange" label="DAO pulse" value={liveRead.metrics[3]?.value ?? liveRead.latestReadStatus} />
-            <Metric accent="purple" label="Risk alerts" value={liveRead.metrics[4]?.value ?? liveRead.latestReadStatus} />
-            <Metric accent="white" label="Health score" value={liveRead.metrics[6]?.value ?? liveRead.latestReadStatus} />
-          </div>
-          <div className="safe-grid lg:grid-cols-[1.3fr_0.7fr]">
-            <GlassPanel>
-              <PanelTitle title="Cohort trend" subtitle="Aggregate trend appears after live contract reads are available." />
-              <CohortChart liveRead={liveRead} />
-            </GlassPanel>
-            <GlassPanel>
-              <PanelTitle title="Risk distribution" subtitle="No individual wallet risk table is exposed." />
-              <RiskState liveRead={liveRead} />
-            </GlassPanel>
-          </div>
-        </section>
-
-        <section id="submit" className="section-shell safe-grid lg:grid-cols-[1.1fr_0.9fr]">
-          <GlassPanel>
-            <SectionHeader kicker="Submit" title="Encrypted signal submission" compact />
-            <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <label className="space-y-2 text-sm font-medium text-ink/74">
-                Cohort
-                <select className="field" value={signal.cohort} onChange={(event) => setSignal({ ...signal, cohort: event.target.value as Cohort })}>
-                  {cohorts.map((cohort) => (
-                    <option key={cohort}>{cohort}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="space-y-2 text-sm font-medium text-ink/74">
-                DAO sentiment
-                <select className="field" value={signal.daoVote} onChange={(event) => setSignal({ ...signal, daoVote: event.target.value as SignalFormValues["daoVote"] })}>
-                  <option value="yes">Positive</option>
-                  <option value="no">Negative</option>
-                </select>
-              </label>
-              <RangeField label="Activity metric" max={1200} value={signal.activityAmount} onChange={(activityAmount) => setSignal({ ...signal, activityAmount })} />
-              <RangeField label="Risk score" max={100} value={signal.riskScore} onChange={(riskScore) => setSignal({ ...signal, riskScore })} />
-              <RangeField label="KPI value" max={100} value={signal.kpiValue} onChange={(kpiValue) => setSignal({ ...signal, kpiValue })} />
-            </div>
-            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <button disabled={submitDisabled} onClick={handleSubmit} className="rounded-full border-[3px] border-ink bg-orangepop px-5 py-3 text-sm font-black text-ink shadow-brutal transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none disabled:cursor-not-allowed disabled:bg-ink/20 disabled:text-ink/45 disabled:shadow-none">
-                {submitButtonLabel}
+              <button onClick={() => handleNavigate("governance-pulse")} className="rounded-full border-[3px] border-ink bg-cyanpop px-5 py-3 text-sm font-black shadow-brutal transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none">
+                Explore governance pulse
               </button>
-              <button disabled={submitDisabled} onClick={handleTestSignal} className="rounded-full border-[3px] border-ink bg-limepop px-5 py-3 text-sm font-black text-ink shadow-brutal transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none disabled:cursor-not-allowed disabled:bg-ink/20 disabled:text-ink/45 disabled:shadow-none">
-                Submit test encrypted signal
-              </button>
-              <p className="text-sm font-semibold text-ink/65">{submitHint}</p>
+              <Link href="/simulator" className="rounded-full border-[3px] border-ink bg-limepop px-5 py-3 text-sm font-black shadow-brutal transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none">
+                Open live simulator
+              </Link>
             </div>
-            {submitState === "failed" || submitState === "confirmed" ? (
-              <div className={`mt-4 rounded-2xl border p-4 text-sm ${submitState === "confirmed" ? "border-limepop/50 bg-limepop/12" : "border-pinkpop/50 bg-pinkpop/10"}`}>
-                {submitMessage}
-              </div>
-            ) : null}
-          </GlassPanel>
-
-          <GlassPanel className="neo-card">
-            <PanelTitle title="Transaction readiness" subtitle="Submission unlocks after contract deployment and wallet connection." />
-            <Readiness runtime={runtime} wallet={wallet} liveRead={liveRead} />
-          </GlassPanel>
-
-          <GlassPanel className="neo-card lg:col-span-2">
-            <PanelTitle title="Seed Live Analytics" subtitle="Submit real encrypted records to the Sepolia contract, then refresh and auto-request aggregate reveal." />
-            <SeedLivePanel
-              disabled={submitDisabled || seedProgress.phase === "submitting" || seedProgress.phase === "encrypting"}
-              onRefresh={handleRefreshAnalytics}
-              onReset={handleResetLocalSeedStatus}
-              onSeed={handleSeedLiveAnalytics}
-              progress={seedProgress}
-            />
-          </GlassPanel>
-        </section>
-
-        <section id="cohorts" className="section-shell safe-grid lg:grid-cols-4">
-          <SectionHeader className="lg:col-span-4" kicker="Cohorts" title="Aggregate cohort intelligence" />
-          {cohorts.map((cohort) => (
-            <GlassPanel key={cohort}>
-              <div className="text-sm font-black text-ink/58">{cohort}</div>
-              <div className="mt-5 text-2xl font-black">{liveRead.cohortStatus[cohort] ?? liveRead.latestReadStatus}</div>
-              <p className="mt-2 text-sm font-semibold text-ink/62">No wallet-level cohort table is exposed.</p>
-            </GlassPanel>
-          ))}
-        </section>
-
-        <section id="alerts" className="section-shell safe-grid lg:grid-cols-[0.8fr_1.2fr]">
-          <GlassPanel>
-            <SectionHeader kicker="Alerts" title="Confidential KPI alerting" compact />
-            <div className="mt-6 rounded-3xl border-[3px] border-ink bg-orangepop/36 p-5 shadow-brutalSm">
-              <div className="text-sm font-black text-ink/58">Current alert state</div>
-              <div className="mt-3 text-3xl font-black">{liveRead.metrics[5]?.value ?? liveRead.latestReadStatus}</div>
-              <p className="mt-3 text-sm font-semibold text-ink/66">{liveRead.latestRevealStatus}</p>
-            </div>
-          </GlassPanel>
-          <GlassPanel>
-            <PanelTitle title="Alert flow" subtitle="KPI values stay encrypted; only authorized aggregate status is surfaced." />
-            <div className="mt-6 grid gap-3 sm:grid-cols-4">
-              {["Encrypted KPI", "FHE threshold", "Authorized reveal", "Aggregate status"].map((item) => (
-                <div key={item} className="rounded-2xl border-[3px] border-ink bg-white/72 p-4 text-sm font-black text-ink/72 shadow-brutalSm">
-                  {item}
-                </div>
-              ))}
-            </div>
-          </GlassPanel>
-        </section>
-
-        <section id="security" className="section-shell safe-grid lg:grid-cols-2">
-          <GlassPanel>
-            <SectionHeader kicker="Security" title="Privacy model by design" compact />
-            <div className="mt-5 grid gap-3">
-              {[
-                "Raw values are encrypted before submission",
-                "Individual submissions are not displayed",
-                "Dashboard shows aggregate insights only",
-                "Events do not expose private values",
-                "Authorized reveal model",
-                "Raw wallet-level table is not available"
-              ].map((item) => (
-                <div key={item} className="rounded-2xl border-[3px] border-ink bg-white/72 p-4 text-sm font-black text-ink/72 shadow-brutalSm">
-                  {item}
-                </div>
-              ))}
-            </div>
-          </GlassPanel>
-          <GlassPanel>
-            <PanelTitle title="Data release boundary" subtitle="CipherPulse is designed around aggregate analytics rather than wallet-level inspection." />
-            <div className="mt-6 rounded-3xl border-[3px] border-ink bg-gradient-to-br from-limepop/34 via-white/72 to-cyanpop/34 p-6 shadow-brutal">
-              <div className="text-5xl font-black">0</div>
-              <div className="mt-2 text-sm font-black text-ink/66">raw wallet-level rows rendered</div>
-            </div>
-          </GlassPanel>
-        </section>
-
-        <section id="protocol" className="section-shell safe-grid lg:grid-cols-[1fr_1fr]">
-          <GlassPanel>
-            <SectionHeader kicker="Protocol" title="Fhenix integration" compact />
-            <ProtocolStatus runtime={runtime} latestTx={latestTx} liveRead={liveRead} />
-          </GlassPanel>
-          <GlassPanel>
-            <PanelTitle title="Operations used" subtitle="Contract source remains available in the repository." />
-            <div className="mt-5 grid gap-2 sm:grid-cols-2">
-              {["euint8", "euint32", "ebool", "FHE.add", "FHE.gte", "FHE.select", "FHE.allowThis", "FHE.allowSender"].map((item) => (
-                <span key={item} className="rounded-full border-[3px] border-ink bg-white/74 px-4 py-2 text-sm font-black text-ink/72 shadow-brutalSm">
+            <div className="mt-8 flex flex-wrap gap-2">
+              {["Public metrics + private aggregate snapshots", "No wallet-level tables", "FHE only where privacy matters", "Daily/weekly private updates"].map((item) => (
+                <span key={item} className="rounded-full border-2 border-ink bg-white/72 px-3 py-2 text-xs font-black text-ink/70 shadow-brutalSm">
                   {item}
                 </span>
               ))}
             </div>
-            <div className="mt-6 grid gap-3">
-              <button disabled={!runtime.contractConfigured || !wallet.connected || revealState === "pending"} onClick={() => handleReveal(0, 0)} className="rounded-full border-[3px] border-ink bg-cyanpop px-4 py-3 text-sm font-black shadow-brutalSm disabled:cursor-not-allowed disabled:bg-ink/20 disabled:text-ink/45">
-                Request aggregate reveal
-              </button>
-              <button disabled={!runtime.contractConfigured || !wallet.connected || revealState === "pending"} onClick={() => handleReveal(5, 0)} className="rounded-full border-[3px] border-ink bg-limepop px-4 py-3 text-sm font-black shadow-brutalSm disabled:cursor-not-allowed disabled:bg-ink/20 disabled:text-ink/45">
-                Reveal cohort metrics
-              </button>
-              <button disabled={!runtime.contractConfigured || !wallet.connected || revealState === "pending"} onClick={() => handleReveal(3, 0)} className="rounded-full border-[3px] border-ink bg-pinkpop px-4 py-3 text-sm font-black shadow-brutalSm disabled:cursor-not-allowed disabled:bg-ink/20 disabled:text-ink/45">
-                Reveal DAO pulse
-              </button>
-              <button disabled={!runtime.contractConfigured || !wallet.connected || revealState === "pending"} onClick={() => handleReveal(6, 0)} className="rounded-full border-[3px] border-ink bg-orangepop px-4 py-3 text-sm font-black shadow-brutalSm disabled:cursor-not-allowed disabled:bg-ink/20 disabled:text-ink/45">
-                Reveal alert status
-              </button>
-              <div className={`rounded-2xl border-[3px] border-ink bg-white/74 p-4 text-sm font-black shadow-brutalSm ${revealState === "failed" ? "text-pinkpop" : "text-ink/72"}`}>
-                {revealMessage}
-              </div>
+          </GlassPanel>
+
+          <GlassPanel className="neo-card bg-cyanpop/35">
+            <PanelTitle title="Snapshot model" subtitle="Private metrics update as daily or weekly encrypted snapshots. Public metrics can update continuously." />
+            <FlowStrip />
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <MiniProof label="Public analytics" value="Frequent reads" />
+              <MiniProof label="Private FHE snapshot" value={snapshot.snapshotState} />
+              <MiniProof label="Last snapshot" value={snapshot.lastSnapshot} />
+              <MiniProof label="Next snapshot" value={snapshot.nextSnapshot} />
             </div>
+          </GlassPanel>
+        </section>
+
+        <section className="section-shell safe-grid md:grid-cols-2 xl:grid-cols-3">
+          <SummaryCard label="Community Health" value={snapshot.health} source="Mixed" detail={snapshot.healthDetail} />
+          <SummaryCard label="Governance Sentiment" value={snapshot.daoPulse} source="Private FHE Snapshot" detail="Released only as an aggregate snapshot." />
+          <SummaryCard label="Activity Trend" value={snapshot.activityTrend} source="Public" detail={`${snapshot.activeWallets} active wallets across ${snapshot.transactionCount} public interactions.`} />
+          <SummaryCard label="Whale Influence" value={snapshot.whaleInfluence} source="Private FHE Snapshot" detail="No wallet list is exposed." />
+          <SummaryCard label="Risk Pressure" value={snapshot.riskPressure} source="Private FHE Snapshot" detail="Risk buckets are aggregate-only." />
+          <SummaryCard label="Last Private Snapshot" value={snapshot.lastSnapshot} source="Private FHE Snapshot" detail={`${snapshot.privateSignals} encrypted signals in the latest aggregate snapshot.`} />
+        </section>
+
+        <section id="community-health" className="section-shell space-y-5">
+          <SectionHeader kicker="Community Health" title="A shared health view for the whole protocol" />
+          <GlassPanel className="bg-limepop/36">
+            <p className="max-w-4xl text-lg font-bold leading-8 text-ink/72">
+              This is not a private admin report. CipherPulse is a shared aggregate transparency layer for protocol
+              teams, DAO members, token holders, contributors, users, and partners.
+            </p>
+          </GlassPanel>
+          <div className="safe-grid md:grid-cols-2 xl:grid-cols-3">
+            <InsightCard title="Overall health" value={snapshot.health} source="Mixed" detail={snapshot.healthDetail} accent="lime" />
+            <InsightCard title="Participation quality" value={snapshot.participationQuality} source="Mixed" detail="Combines public participation and private sentiment pressure." accent="cyan" />
+            <InsightCard title="Contributor activity" value={snapshot.contributorActivity} source="Public" detail={`${snapshot.activityTrend} change from the previous community window.`} accent="white" />
+            <InsightCard title="Governance confidence" value={snapshot.daoPulse} source="Private FHE Snapshot" detail="Private survey or pulse signals reveal only aggregate confidence." accent="pink" />
+            <InsightCard title="Risk pressure" value={snapshot.riskPressure} source="Private FHE Snapshot" detail="No raw risk scores are shown." accent="orange" />
+            <InsightCard title="Whale concentration" value={snapshot.whaleInfluence} source="Private FHE Snapshot" detail="Concentration is summarized without wallet-level exposure." accent="purple" />
+          </div>
+          <GlassPanel>
+            <PanelTitle title="Health composition" subtitle="A single shared protocol view composed from public activity and private aggregate snapshots." />
+            <HealthComposition snapshot={snapshot} />
+          </GlassPanel>
+        </section>
+
+        <section id="governance-pulse" className="section-shell safe-grid lg:grid-cols-[0.9fr_1.1fr]">
+          <GlassPanel>
+            <SectionHeader kicker="Governance Pulse" title="Proposal sentiment without vote leakage" compact />
+            <p className="mt-4 font-semibold leading-7 text-ink/68">
+              CipherPulse does not reveal how any wallet voted. It only shows aggregate proposal sentiment. Public votes
+              can remain public metrics; private pulse surveys become FHE snapshots.
+            </p>
+            <div className="mt-6 grid gap-3">
+              <MetricRow label="Support" value={snapshot.daoPulse} source="Private FHE Snapshot" />
+              <MetricRow label="Against" value={snapshot.againstPulse} source="Private FHE Snapshot" />
+              <MetricRow label="Abstain" value={`${snapshot.abstainPct}% abstain`} source="Private FHE Snapshot" />
+              <MetricRow label="Proposal readiness" value="Ready with watchlist" source="Mixed" />
+              <MetricRow label="Participation diversity" value={snapshot.participationQuality} source="Mixed" />
+            </div>
+          </GlassPanel>
+          <GlassPanel className="bg-pinkpop/28">
+            <PanelTitle title="Sentiment trend" subtitle="A daily/weekly private pulse can be cached for every community member." />
+            <SimpleBars
+              labels={["Support", "Against", "Abstain"]}
+              values={[snapshot.daoPct, snapshot.againstPct, snapshot.abstainPct]}
+              pending={false}
+            />
+          </GlassPanel>
+        </section>
+
+        <section id="activity-cohorts" className="section-shell space-y-5">
+          <SectionHeader kicker="Activity & Cohorts" title="Public activity plus private cohort pulse" />
+          <div className="safe-grid lg:grid-cols-[0.8fr_1.2fr]">
+            <GlassPanel>
+              <PanelTitle title="Public analytics path" subtitle="Cheap public metrics stay outside FHE and can update more often." />
+              <div className="mt-6 grid gap-3">
+                <MetricRow label="Active wallets" value={snapshot.activeWallets} source="Public" />
+                <MetricRow label="Transaction count" value={snapshot.transactionCount} source="Public" />
+                <MetricRow label="Proposal count" value={snapshot.proposalCount} source="Public" />
+                <MetricRow label="Public participation" value={snapshot.publicParticipation} source="Public" />
+              </div>
+            </GlassPanel>
+            <GlassPanel>
+              <PanelTitle title="Private cohort pulse" subtitle="Cohorts are aggregate transparency signals, not admin segmentation." />
+              <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                {snapshot.cohorts.map((cohort) => (
+                  <CohortTile key={cohort.cohort} cohort={cohort.cohort} count={cohort.count} pulse={cohort.pulse} volume={cohort.volume} />
+                ))}
+              </div>
+            </GlassPanel>
+          </div>
+        </section>
+
+        <section id="risk-influence" className="section-shell safe-grid lg:grid-cols-[1.1fr_0.9fr]">
+          <GlassPanel>
+            <SectionHeader kicker="Risk & Influence" title="Is the community being pressured or dominated?" compact />
+            <p className="mt-4 font-semibold leading-7 text-ink/68">
+              CipherPulse shows whether risk pressure exists. It does not expose which wallet caused it.
+            </p>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <InsightCard title="Whale influence" value={snapshot.whaleInfluence} source="Private FHE Snapshot" detail="Private concentration thresholds reveal only a level." accent="purple" />
+              <InsightCard title="Sybil / risk pressure" value={snapshot.riskPressure} source="Private FHE Snapshot" detail="Sensitive risk buckets stay encrypted until aggregate reveal." accent="orange" />
+              <InsightCard title="Participation concentration" value={snapshot.participationQuality} source="Mixed" detail="Public distribution can be combined with private pressure signals." accent="cyan" />
+              <InsightCard title="Alert status" value={snapshot.alertStatus} source="Private FHE Snapshot" detail="Confidential KPI threshold emits only aggregate status." accent="pink" />
+            </div>
+          </GlassPanel>
+          <GlassPanel className="bg-orangepop/26">
+            <PanelTitle title="Risk distribution" subtitle="Private risk scores are shown only as aggregate buckets." />
+            <RiskDistribution snapshot={snapshot} />
           </GlassPanel>
         </section>
       </div>
@@ -452,20 +290,81 @@ export default function Home() {
   );
 }
 
+function buildSnapshot(liveRead: LiveAnalyticsRead, dashboardSeed: ReturnType<typeof toDashboardSeed>) {
+  const healthMetric = metric(liveRead, "Health score");
+  const daoMetric = metric(liveRead, "DAO pulse");
+  const riskMetric = metric(liveRead, "Risk alerts");
+  const alertMetric = metric(liveRead, "Alert status");
+  const parsedDaoPct = parseFirstNumber(daoMetric?.value);
+  const daoPct = daoMetric?.status === "revealed" && parsedDaoPct !== undefined && parsedDaoPct > 0 ? parsedDaoPct : undefined;
+  const riskCount = parseFirstNumber(riskMetric?.value);
+  const revealed = liveRead.revealAvailable || liveRead.metrics.some((item) => item.status === "revealed");
+  const riskHigh = riskCount ?? dashboardSeed.riskBuckets.high;
+  const snapshotState = revealed ? "Live FHE snapshot visible" : "Seeded community snapshot";
+  const riskPressure = riskHigh >= 8 ? "High" : riskHigh >= 3 ? "Amber" : "Low";
+  const health = healthMetric?.status === "revealed" ? healthMetric.value : dashboardSeed.health;
+  const whaleInfluence = riskHigh >= 8 ? "High" : dashboardSeed.whaleInfluence;
+  const resolvedDaoPct = daoPct ?? dashboardSeed.governancePositive;
+
+  return {
+    snapshotState,
+    health,
+    healthDetail:
+      health === "Green"
+        ? "Support is strong and risk pressure is low."
+        : health === "Amber"
+          ? "Support is positive, but influence or risk pressure needs watching."
+          : health === "Red"
+            ? "Private risk pressure is elevated."
+            : dashboardSeed.healthDetail,
+    daoPulse: daoMetric?.status === "revealed" ? daoMetric.value : `${resolvedDaoPct}% positive`,
+    againstPulse: `${daoPct === undefined ? dashboardSeed.governanceAgainst : Math.max(0, 90 - daoPct)}% against`,
+    daoPct: resolvedDaoPct,
+    againstPct: daoPct === undefined ? dashboardSeed.governanceAgainst : Math.max(0, 90 - daoPct),
+    abstainPct: dashboardSeed.governanceAbstain,
+    riskPressure,
+    whaleInfluence,
+    alertStatus: alertMetric?.status === "revealed" ? alertMetric.value : dashboardSeed.alertStatus,
+    participationQuality: dashboardSeed.participationQuality,
+    lastSnapshot: revealed ? "Live reveal available" : dashboardSeed.lastSnapshot,
+    nextSnapshot: dashboardSeed.nextSnapshot,
+    activityTrend: dashboardSeed.activityTrend,
+    activeWallets: dashboardSeed.activeWallets,
+    transactionCount: dashboardSeed.transactionCount,
+    proposalCount: dashboardSeed.proposalCount,
+    publicParticipation: dashboardSeed.publicParticipation,
+    contributorActivity: dashboardSeed.contributorActivity,
+    privateSignals: liveRead.submissionCount > 1 ? liveRead.submissionCount : 30,
+    healthScore: dashboardSeed.healthScore,
+    riskBuckets: dashboardSeed.riskBuckets,
+    cohorts: dashboardSeed.cohorts
+  };
+}
+
+function metric(liveRead: LiveAnalyticsRead, label: string) {
+  return liveRead.metrics.find((item) => item.label === label);
+}
+
+function parseFirstNumber(value?: string) {
+  if (!value) return undefined;
+  const match = value.match(/\d+/);
+  return match ? Number(match[0]) : undefined;
+}
+
 function TopNav({
   activeSection,
   mobileOpen,
   onConnect,
-  onNavigate,
   onMobileToggle,
+  onNavigate,
   runtime,
   wallet
 }: {
   activeSection: string;
   mobileOpen: boolean;
   onConnect: () => void;
-  onNavigate: (id: string) => void;
   onMobileToggle: () => void;
+  onNavigate: (id: string) => void;
   runtime: NetworkStatus;
   wallet: WalletState;
 }) {
@@ -476,12 +375,12 @@ function TopNav({
           <span className="flex h-10 w-10 items-center justify-center rounded-2xl border-[3px] border-ink bg-pinkpop text-sm font-black text-ink shadow-brutalSm">CP</span>
           <span>
             <span className="block text-base font-black leading-none">CipherPulse</span>
-            <span className="hidden text-xs text-ink/52 sm:block">Confidential analytics</span>
+            <span className="hidden text-xs text-ink/52 sm:block">Shared protocol analytics</span>
           </span>
         </button>
-        <nav className="hidden items-center gap-1 lg:flex">
+        <nav className="hidden items-center gap-1 xl:flex">
           {navItems.map(([id, label]) => (
-            <button key={id} onClick={() => onNavigate(id)} className={`rounded-full px-3 py-2 text-sm text-ink/70 transition hover:bg-white/80 ${activeSection === id ? "border-2 border-ink bg-limepop font-black text-ink shadow-brutalSm" : "font-black"}`}>
+            <button key={id} onClick={() => onNavigate(id)} className={`rounded-full px-3 py-2 text-xs text-ink/70 transition hover:bg-white/80 ${activeSection === id ? "border-2 border-ink bg-limepop font-black text-ink shadow-brutalSm" : "font-black"}`}>
               {label}
             </button>
           ))}
@@ -489,15 +388,15 @@ function TopNav({
         <div className="hidden items-center gap-3 lg:flex">
           <StatusDot runtime={runtime} wallet={wallet} />
           <button onClick={onConnect} className="rounded-full border-[3px] border-ink bg-cyanpop px-4 py-2 text-sm font-black text-ink shadow-brutalSm transition hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-none">
-            {wallet.connected ? "Wallet connected" : "Connect Wallet"}
+            {wallet.connected ? "Wallet connected" : "Connect wallet"}
           </button>
         </div>
-        <button onClick={onMobileToggle} className="rounded-full border-[3px] border-ink bg-white/86 px-4 py-2 text-sm font-black shadow-brutalSm lg:hidden">
+        <button onClick={onMobileToggle} className="rounded-full border-[3px] border-ink bg-white/86 px-4 py-2 text-sm font-black shadow-brutalSm xl:hidden">
           Menu
         </button>
       </div>
       {mobileOpen ? (
-        <div className="content-container mt-3 rounded-3xl border-[3px] border-ink bg-white/90 p-3 shadow-brutal backdrop-blur-2xl lg:hidden">
+        <div className="content-container mt-3 rounded-3xl border-[3px] border-ink bg-white/92 p-3 shadow-brutal backdrop-blur-2xl xl:hidden">
           <div className="grid gap-1">
             {navItems.map(([id, label]) => (
               <button key={id} onClick={() => onNavigate(id)} className={`rounded-2xl px-4 py-3 text-left text-sm font-black ${activeSection === id ? "border-2 border-ink bg-cyanpop text-ink shadow-brutalSm" : "text-ink/68"}`}>
@@ -505,10 +404,10 @@ function TopNav({
               </button>
             ))}
           </div>
-          <div className="mt-3 flex items-center justify-between gap-3 border-t-2 border-ink/20 pt-3">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t-2 border-ink/20 pt-3">
             <StatusDot runtime={runtime} wallet={wallet} />
             <button onClick={onConnect} className="rounded-full border-[3px] border-ink bg-cyanpop px-4 py-2 text-sm font-black text-ink shadow-brutalSm">
-              {wallet.connected ? "Wallet connected" : "Connect Wallet"}
+              {wallet.connected ? "Wallet connected" : "Connect wallet"}
             </button>
           </div>
         </div>
@@ -519,33 +418,12 @@ function TopNav({
 
 function StatusDot({ runtime, wallet }: { runtime: NetworkStatus; wallet: WalletState }) {
   const color = runtime.contractConfigured && wallet.connected ? "bg-limepop" : runtime.contractConfigured ? "bg-orangepop" : "bg-ink/28";
-  const label = runtime.contractConfigured ? (wallet.connected ? "Wallet connected" : runtime.networkLabel) : "Contract pending";
+  const label = runtime.contractConfigured ? (wallet.connected ? "Wallet connected" : "Live Sepolia contract") : "Snapshot contract pending";
   return (
-    <span className="inline-flex items-center gap-2 text-sm text-ink/62">
+    <span className="inline-flex items-center gap-2 text-sm font-bold text-ink/62">
       <span className={`h-2.5 w-2.5 rounded-full ${color}`} />
       {label}
     </span>
-  );
-}
-
-function StatusLine({ runtime, wallet }: { runtime: NetworkStatus; wallet: WalletState }) {
-  return (
-    <div className="inline-flex items-center gap-2 rounded-full border-2 border-ink bg-white/70 px-3 py-1 text-sm font-black text-ink/68 shadow-brutalSm backdrop-blur">
-      <span className={`h-2.5 w-2.5 rounded-full ${runtime.contractConfigured && wallet.connected ? "bg-limepop" : "bg-ink/30"}`} />
-      {runtime.contractConfigured ? runtime.networkLabel : "Contract not configured"}
-    </div>
-  );
-}
-
-function FlowStrip() {
-  return (
-    <div className="mt-8 grid gap-2 rounded-3xl border-[3px] border-ink bg-white/58 p-3 shadow-brutalSm backdrop-blur sm:grid-cols-5">
-      {["Private Signal", "Browser Encryption", "Fhenix Contract", "Encrypted Aggregate", "Authorized Insight"].map((item) => (
-        <div key={item} className="rounded-2xl border-2 border-ink bg-white/74 px-3 py-3 text-center text-xs font-black text-ink/72 shadow-brutalSm">
-          {item}
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -562,265 +440,177 @@ function SectionHeader({ kicker, title, compact = false, className = "" }: { kic
   );
 }
 
-function Metric({ label, value, accent }: { label: string; value: string; accent: "cyan" | "pink" | "lime" | "orange" | "purple" | "white" }) {
-  const accentClass = {
-    cyan: "bg-cyanpop/65",
-    pink: "bg-pinkpop/65",
-    lime: "bg-limepop/70",
-    orange: "bg-orangepop/70",
-    purple: "bg-purplepop/65",
-    white: "bg-white/68"
-  }[accent];
-  return (
-    <GlassPanel className={`neo-card min-h-36 p-5 ${accentClass}`}>
-      <div className="text-sm font-black text-ink/70">{label}</div>
-      <div className="mt-4 break-words text-2xl font-black leading-tight">{value}</div>
-    </GlassPanel>
-  );
-}
-
-function MiniMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between rounded-2xl border-2 border-ink bg-white/72 px-4 py-3 shadow-brutalSm">
-      <span className="text-sm font-bold text-ink/66">{label}</span>
-      <span className="font-black">{value}</span>
-    </div>
-  );
-}
-
 function PanelTitle({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div>
       <h3 className="text-xl font-black">{title}</h3>
-      <p className="mt-1 text-sm text-ink/56">{subtitle}</p>
+      <p className="mt-1 text-sm font-semibold leading-6 text-ink/58">{subtitle}</p>
     </div>
   );
 }
 
-function ContractState({ liveRead, runtime }: { liveRead: LiveAnalyticsRead; runtime: NetworkStatus }) {
-  const title = !runtime.contractConfigured
-    ? "Contract not deployed/configured."
-    : liveRead.contractConnected
-      ? liveRead.latestReadStatus
-      : "Contract connection is being checked.";
-  const detail = liveRead.readError
-    ? liveRead.readError
-    : !runtime.contractConfigured
-      ? "Configure NEXT_PUBLIC_CONTRACT_ADDRESS, NEXT_PUBLIC_RPC_URL, and NEXT_PUBLIC_CHAIN_ID to enable live reads."
-      : liveRead.encryptedAggregateExists
-        ? liveRead.latestRevealStatus
-        : "Submit an encrypted signal to create the first aggregate on Ethereum Sepolia.";
+function SourceBadge({ source }: { source: SourceKind }) {
+  const color = source === "Public" ? "bg-cyanpop" : source === "Mixed" ? "bg-limepop" : "bg-pinkpop";
+  return <span className={`rounded-full border-2 border-ink ${color} px-2.5 py-1 text-[11px] font-black text-ink shadow-brutalSm`}>{source}</span>;
+}
 
+function SummaryCard({ label, value, source, detail }: { label: string; value: string; source: SourceKind; detail: string }) {
   return (
-    <GlassPanel className="bg-cyanpop/34 p-6">
-      <div className="max-w-2xl">
-        <h3 className="text-2xl font-black">{title}</h3>
-        <p className="mt-2 font-semibold text-ink/68">{detail}</p>
+    <GlassPanel className="min-h-44">
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-sm font-black text-ink/58">{label}</div>
+        <SourceBadge source={source} />
       </div>
+      <div className="mt-5 break-words text-3xl font-black leading-tight">{value}</div>
+      <p className="mt-3 text-sm font-semibold leading-6 text-ink/62">{detail}</p>
     </GlassPanel>
   );
 }
 
-function CohortChart({ liveRead }: { liveRead: LiveAnalyticsRead }) {
-  const revealed = Object.values(liveRead.cohortStatus).some((status) => status.includes("revealed"));
-  const encrypted = Object.values(liveRead.cohortStatus).some((status) => status.includes("Encrypted"));
-  const values = cohorts.map((cohort) => {
-    const match = liveRead.cohortStatus[cohort]?.match(/^(\d+)/);
-    return match ? Number(match[1]) : liveRead.cohortStatus[cohort]?.includes("Encrypted") ? 1 : 0;
-  });
-  const max = Math.max(...values, 1);
+function InsightCard({ title, value, source, detail, accent }: { title: string; value: string; source: SourceKind; detail: string; accent: "lime" | "cyan" | "pink" | "orange" | "purple" | "white" }) {
+  const accentClass = {
+    lime: "bg-limepop/45",
+    cyan: "bg-cyanpop/38",
+    pink: "bg-pinkpop/32",
+    orange: "bg-orangepop/36",
+    purple: "bg-purplepop/28",
+    white: "bg-white/70"
+  }[accent];
+  return (
+    <div className={`rounded-3xl border-[3px] border-ink ${accentClass} p-5 shadow-brutalSm`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-sm font-black text-ink/58">{title}</div>
+        <SourceBadge source={source} />
+      </div>
+      <div className="mt-5 break-words text-2xl font-black leading-tight">{value}</div>
+      <p className="mt-3 text-sm font-semibold leading-6 text-ink/62">{detail}</p>
+    </div>
+  );
+}
+
+function MetricRow({ label, value, source }: { label: string; value: string; source: SourceKind }) {
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border-[3px] border-ink bg-white/72 p-4 shadow-brutalSm sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <div className="text-sm font-black text-ink/56">{label}</div>
+        <div className="mt-1 break-words text-xl font-black">{value}</div>
+      </div>
+      <SourceBadge source={source} />
+    </div>
+  );
+}
+
+function CohortTile({ cohort, count, pulse, volume }: { cohort: Cohort; count: number; pulse: string; volume: number }) {
+  return (
+    <div className="rounded-3xl border-[3px] border-ink bg-white/72 p-5 shadow-brutalSm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-sm font-black text-ink/58">{cohort}</div>
+        <SourceBadge source="Private FHE Snapshot" />
+      </div>
+      <div className="mt-5 break-words text-3xl font-black">{count}</div>
+      <p className="mt-1 text-sm font-black text-ink/58">encrypted signals</p>
+      <div className="mt-4 h-4 overflow-hidden rounded-full border-2 border-ink bg-ink/10">
+        <div className="h-full bg-cyanpop" style={{ width: `${volume}%` }} />
+      </div>
+      <p className="mt-3 text-sm font-semibold text-ink/60">{pulse}. Aggregate cohort pulse only.</p>
+    </div>
+  );
+}
+
+function HealthComposition({ snapshot }: { snapshot: ReturnType<typeof buildSnapshot> }) {
+  const items = [
+    ["Health score", snapshot.healthScore, "bg-limepop"],
+    ["Governance confidence", snapshot.daoPct, "bg-pinkpop"],
+    ["Public participation", Number.parseInt(snapshot.publicParticipation, 10), "bg-cyanpop"],
+    ["Influence watch", 64, "bg-orangepop"]
+  ] as const;
 
   return (
-    <div className="mt-6 min-h-72 rounded-3xl border-[3px] border-ink bg-white/64 p-5 shadow-brutal">
-      {!liveRead.contractConnected ? (
-        <ChartStatus text="Contract not configured or not connected yet." />
-      ) : !encrypted && !revealed ? (
-        <ChartStatus text="Contract connected, no encrypted submissions yet." />
-      ) : (
-        <div className="grid h-full gap-4">
-          {cohorts.map((cohort, index) => (
-            <div key={cohort} className="grid gap-2">
-              <div className="flex items-center justify-between gap-3 text-sm font-black">
-                <span>{cohort}</span>
-                <span className="text-ink/56">{liveRead.cohortStatus[cohort]}</span>
-              </div>
-              <div className="h-8 overflow-hidden rounded-full border-2 border-ink bg-ink/8">
-                <div
-                  className={`h-full ${revealed ? "bg-limepop" : "bg-cyanpop"} transition-all`}
-                  style={{ width: `${Math.max(12, (values[index] / max) * 100)}%` }}
-                />
-              </div>
+    <div className="mt-6 grid gap-4 md:grid-cols-4">
+      {items.map(([label, value, color]) => (
+        <div key={label} className="rounded-3xl border-[3px] border-ink bg-white/72 p-4 shadow-brutalSm">
+          <div className="text-sm font-black text-ink/56">{label}</div>
+          <div className="mt-3 text-3xl font-black">{value}%</div>
+          <div className="mt-4 h-4 overflow-hidden rounded-full border-2 border-ink bg-ink/10">
+            <div className={`h-full ${color}`} style={{ width: `${value}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RiskDistribution({ snapshot }: { snapshot: ReturnType<typeof buildSnapshot> }) {
+  const buckets = [
+    ["Low", snapshot.riskBuckets.low, "bg-limepop"],
+    ["Medium", snapshot.riskBuckets.medium, "bg-orangepop"],
+    ["High", snapshot.riskBuckets.high, "bg-pinkpop"]
+  ] as const;
+  const total = Math.max(1, snapshot.riskBuckets.low + snapshot.riskBuckets.medium + snapshot.riskBuckets.high);
+
+  return (
+    <div className="mt-6 grid gap-4">
+      <div className="rounded-3xl border-[3px] border-ink bg-white/72 p-5 shadow-brutalSm">
+        <div className="flex h-8 overflow-hidden rounded-full border-2 border-ink bg-white">
+          {buckets.map(([label, value, color]) => (
+            <div key={label} className={`${color} h-full`} style={{ width: `${(value / total) * 100}%` }} />
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          {buckets.map(([label, value, color]) => (
+            <div key={label} className="rounded-2xl border-2 border-ink bg-white/80 p-3 shadow-brutalSm">
+              <div className={`mb-2 h-3 w-10 rounded-full border border-ink ${color}`} />
+              <div className="text-sm font-black text-ink/56">{label}</div>
+              <div className="text-2xl font-black">{value}</div>
             </div>
           ))}
         </div>
-      )}
-    </div>
-  );
-}
-
-function EmptySparkline({ configured }: { configured: boolean }) {
-  if (!configured) {
-    return <div className="flex h-full items-center justify-center text-center text-sm text-ink/48">Awaiting live contract stream</div>;
-  }
-  return <div className="h-full rounded-2xl bg-cyanpop/10" />;
-}
-
-function RiskState({ liveRead }: { liveRead: LiveAnalyticsRead }) {
-  const riskMetric = liveRead.metrics.find((metric) => metric.label === "Risk alerts");
-  const riskValue = Number.parseInt(riskMetric?.value ?? "", 10);
-  const revealed = riskMetric?.status === "revealed" && Number.isFinite(riskValue);
-  const buckets = revealed
-    ? [
-        ["Low", Math.max(0, liveRead.submissionCount - riskValue - Math.ceil(liveRead.submissionCount / 3))],
-        ["Medium", Math.ceil(liveRead.submissionCount / 3)],
-        ["High", riskValue]
-      ]
-    : [
-        ["Low", 0],
-        ["Medium", 0],
-        ["High", 0]
-      ];
-  const max = Math.max(...buckets.map(([, value]) => Number(value)), 1);
-
-  return (
-    <div className="mt-6 grid gap-3">
-      {buckets.map(([label, value]) => (
-        <div key={label} className="rounded-2xl border-[3px] border-ink bg-white/68 p-4 shadow-brutalSm">
-          <div className="flex items-center justify-between text-sm text-ink/56">
-            <span>{label}</span>
-            <span>{revealed ? value : liveRead.latestRevealStatus}</span>
-          </div>
-          <div className="mt-3 h-3 overflow-hidden rounded-full border border-ink bg-ink/8">
-            <div className="h-full bg-pinkpop" style={{ width: revealed ? `${(Number(value) / max) * 100}%` : "18%" }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ChartStatus({ text }: { text: string }) {
-  return (
-    <div className="flex h-full min-h-56 items-center justify-center rounded-2xl border-2 border-dashed border-ink/30 p-6 text-center text-sm font-black text-ink/54">
-      {text}
-    </div>
-  );
-}
-
-function RangeField({ label, max, value, onChange }: { label: string; max: number; value: number; onChange: (value: number) => void }) {
-  return (
-    <label className="space-y-2 text-sm font-medium text-ink/74">
-      <span className="flex items-center justify-between">
-        {label}
-        <span className="text-ink/46">{value}</span>
-      </span>
-      <input className="w-full accent-cyanpop" min={0} max={max} type="range" value={value} onChange={(event) => onChange(Number(event.target.value))} />
-    </label>
-  );
-}
-
-function Readiness({ runtime, wallet, liveRead }: { runtime: NetworkStatus; wallet: WalletState; liveRead: LiveAnalyticsRead }) {
-  const items = [
-    ["Wallet", wallet.connected ? "Connected" : "Not connected"],
-    ["Contract", runtime.contractConfigured ? "Configured" : "Pending deployment"],
-    ["Contract connected", liveRead.contractConnected ? "Yes" : "No"],
-    ["Network", runtime.expectedChainId ? String(runtime.expectedChainId) : "Ethereum Sepolia target"],
-    ["Adapter", runtime.fhenixSdkLoaded ? "Available" : "Pending"],
-    ["Latest read", liveRead.latestReadStatus],
-    ["Latest reveal", liveRead.latestRevealStatus]
-  ];
-  return (
-    <div className="mt-6 grid gap-3">
-      {items.map(([label, value]) => (
-        <div key={label} className="flex items-center justify-between gap-3 rounded-2xl border-[3px] border-ink bg-white/74 px-4 py-3 text-sm shadow-brutalSm">
-          <span className="font-black text-ink/56">{label}</span>
-          <span className="font-black">{value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SeedLivePanel({
-  disabled,
-  onRefresh,
-  onReset,
-  onSeed,
-  progress
-}: {
-  disabled: boolean;
-  onRefresh: () => void;
-  onReset: () => void;
-  onSeed: () => void;
-  progress: SeedProgress;
-}) {
-  const pct = progress.total ? Math.round((progress.current / progress.total) * 100) : 0;
-  return (
-    <div className="mt-6 grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
-      <div className="rounded-3xl border-[3px] border-ink bg-limepop/52 p-5 shadow-brutalSm">
-        <div className="text-sm font-black text-ink/58">Live seed progress</div>
-        <div className="mt-3 text-3xl font-black">
-          {progress.successful}/{progress.total}
-        </div>
-        <div className="mt-4 h-4 overflow-hidden rounded-full border-2 border-ink bg-white/72">
-          <div className="h-full bg-cyanpop transition-all" style={{ width: `${pct}%` }} />
-        </div>
-        <p className="mt-3 text-sm font-black text-ink/68">{progress.message}</p>
-        <div className="mt-4 grid grid-cols-2 gap-3 text-sm font-black">
-          <div className="rounded-2xl border-2 border-ink bg-white/74 p-3 shadow-brutalSm">Success: {progress.successful}</div>
-          <div className="rounded-2xl border-2 border-ink bg-white/74 p-3 shadow-brutalSm">Failed: {progress.failed}</div>
-        </div>
       </div>
       <div className="grid gap-3">
-        <div className="flex flex-wrap gap-3">
-          <button disabled={disabled} onClick={onSeed} className="rounded-full border-[3px] border-ink bg-pinkpop px-5 py-3 text-sm font-black shadow-brutal transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none disabled:cursor-not-allowed disabled:bg-ink/20 disabled:text-ink/45 disabled:shadow-none">
-            Seed 30 encrypted signals
-          </button>
-          <button onClick={onRefresh} className="rounded-full border-[3px] border-ink bg-cyanpop px-5 py-3 text-sm font-black shadow-brutal transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none">
-            Refresh analytics
-          </button>
-          <button onClick={onReset} className="rounded-full border-[3px] border-ink bg-white/80 px-5 py-3 text-sm font-black shadow-brutal transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none">
-            Reset local UI status
-          </button>
-        </div>
-        <div className="rounded-3xl border-[3px] border-ink bg-white/72 p-4 shadow-brutalSm">
-          <div className="text-sm font-black text-ink/52">Latest seed transaction</div>
-          <div className="mt-1 break-all text-sm font-black text-ink/78">{progress.latestTx ?? "No seed transaction in this browser session"}</div>
-        </div>
-        <div className="rounded-3xl border-[3px] border-ink bg-white/72 p-4 shadow-brutalSm">
-          <div className="text-sm font-black text-ink/52">Technical proof</div>
-          <div className="mt-2 grid gap-2 text-sm font-black text-ink/70 sm:grid-cols-2">
-            <span>Raw individual rows rendered: 0</span>
-            <span>Raw seed values displayed: 0</span>
-            <span>Confirmed tx count: {progress.successful}</span>
-            <span>Failed tx count: {progress.failed}</span>
+        {["No individual risky wallets displayed", "No raw risk scores displayed", "Only aggregate pressure levels are visible"].map((item) => (
+          <div key={item} className="rounded-2xl border-[3px] border-ink bg-white/72 p-4 text-sm font-black text-ink/70 shadow-brutalSm">
+            {item}
           </div>
-        </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function ProtocolStatus({ runtime, latestTx, liveRead }: { runtime: NetworkStatus; latestTx?: string; liveRead: LiveAnalyticsRead }) {
-  const rows = [
-    ["Contract address", runtime.contractAddress ?? "Contract not deployed/configured"],
-    ["Network", runtime.expectedChainId ? runtime.networkLabel : "Ethereum Sepolia target"],
-    ["Chain ID", runtime.expectedChainId ? String(runtime.expectedChainId) : "11155111 target"],
-    ["Deployer", "0xc6F268f7E74823B2e485fb6b45DC8F2D8E7192B1"],
-    ["RPC", runtime.rpcConfigured ? "configured" : "https://ethereum-sepolia-rpc.publicnode.com target"],
-    ["Adapter status", runtime.fhenixSdkLoaded ? "available" : "pending"],
-    ["Contract connected", liveRead.contractConnected ? "yes" : "no"],
-    ["Latest transaction", latestTx ?? liveRead.latestTransaction ?? "none yet"],
-    ["Latest read status", liveRead.latestReadStatus],
-    ["Latest reveal status", liveRead.latestRevealStatus],
-    ["Contract source", "available in repository"]
-  ];
+function FlowStrip() {
   return (
-    <div className="mt-5 grid gap-3">
-      {rows.map(([label, value]) => (
-        <div key={label} className="rounded-2xl border-[3px] border-ink bg-white/74 p-4 shadow-brutalSm">
-          <div className="text-sm font-black text-ink/52">{label}</div>
-          <div className="mt-1 break-all text-sm font-black text-ink/78">{value}</div>
+    <div className="mt-6 grid gap-2 rounded-3xl border-[3px] border-ink bg-white/58 p-3 shadow-brutalSm backdrop-blur sm:grid-cols-5">
+      {["Public Metrics", "Private Signals", "Batched Encryption", "FHE Snapshot", "Shared Dashboard"].map((item) => (
+        <div key={item} className="rounded-2xl border-2 border-ink bg-white/74 px-3 py-3 text-center text-xs font-black text-ink/72 shadow-brutalSm">
+          {item}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MiniProof({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border-[3px] border-ink bg-white/74 p-4 shadow-brutalSm">
+      <div className="text-xs font-black text-ink/52">{label}</div>
+      <div className="mt-1 break-words text-lg font-black">{value}</div>
+    </div>
+  );
+}
+
+function SimpleBars({ labels, values, pending }: { labels: string[]; values: number[]; pending: boolean }) {
+  const max = Math.max(...values, 1);
+  return (
+    <div className="mt-6 grid gap-4">
+      {labels.map((label, index) => (
+        <div key={label}>
+          <div className="flex items-center justify-between text-sm font-black text-ink/62">
+            <span>{label}</span>
+            <span>{pending ? "Snapshot pending" : `${values[index]}%`}</span>
+          </div>
+          <div className="mt-2 h-7 overflow-hidden rounded-full border-2 border-ink bg-white/70 shadow-brutalSm">
+            <div className={`h-full ${index === 0 ? "bg-limepop" : index === 1 ? "bg-pinkpop" : "bg-cyanpop"}`} style={{ width: `${pending ? 18 : Math.max(5, (values[index] / max) * 100)}%` }} />
+          </div>
         </div>
       ))}
     </div>
