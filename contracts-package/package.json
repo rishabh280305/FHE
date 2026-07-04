@@ -1,0 +1,30 @@
+{
+  "name": "cipherpulse-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional Hardhat and Fhenix/CoFHE contract tooling for CipherPulse.",
+  "scripts": {
+    "compile": "hardhat compile --config hardhat.config.ts",
+    "test": "hardhat test --config hardhat.config.ts",
+    "deploy:arb": "hardhat run scripts/deploy.ts --network arbitrumSepolia --config hardhat.config.ts",
+    "deploy:base": "hardhat run scripts/deploy.ts --network baseSepolia --config hardhat.config.ts",
+    "deploy:sepolia": "hardhat run scripts/deploy.ts --network sepolia --config hardhat.config.ts",
+    "seed:sepolia": "ts-node scripts/seed-live.ts"
+  },
+  "dependencies": {
+    "@cofhe/sdk": "^0.6.0",
+    "@fhenixprotocol/cofhe-contracts": "^0.1.4",
+    "@openzeppelin/contracts": "^5.0.2",
+    "cipherpulse": "file:.."
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "@types/chai": "^4.3.16",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.10.2",
+    "chai": "^4.5.0",
+    "hardhat": "^2.26.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}

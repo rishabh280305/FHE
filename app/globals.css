@@ -1,0 +1,168 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-space-grotesk: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 12% 10%, rgba(38, 240, 255, 0.18), transparent 28%),
+    radial-gradient(circle at 84% 16%, rgba(255, 75, 184, 0.13), transparent 26%),
+    radial-gradient(circle at 48% 94%, rgba(184, 255, 61, 0.13), transparent 30%),
+    linear-gradient(rgba(17, 17, 17, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 17, 17, 0.04) 1px, transparent 1px),
+    #fff6df;
+  background-size: auto, auto, auto, 34px 34px, 34px 34px;
+  color: #111111;
+  overflow-x: hidden;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.glass-card {
+  position: relative;
+  overflow: visible;
+  background-image:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.2)),
+    linear-gradient(90deg, rgba(38, 240, 255, 0.12), rgba(255, 75, 184, 0.1), rgba(184, 255, 61, 0.12));
+  backdrop-filter: blur(22px) saturate(1.25);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+}
+
+.glass-product {
+  position: relative;
+  overflow: visible;
+  background-image:
+    linear-gradient(140deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.34)),
+    linear-gradient(90deg, rgba(38, 240, 255, 0.12), rgba(255, 75, 184, 0.1), rgba(184, 255, 61, 0.1));
+  backdrop-filter: blur(22px) saturate(1.18);
+  -webkit-backdrop-filter: blur(22px) saturate(1.18);
+}
+
+.field {
+  width: 100%;
+  border-radius: 18px;
+  border: 3px solid #111111;
+  background: rgba(255, 255, 255, 0.74);
+  padding: 12px 14px;
+  color: #111111;
+  outline: none;
+  box-shadow: 3px 3px 0 rgba(17, 17, 17, 0.78), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(14px);
+  font-weight: 700;
+}
+
+.field:focus {
+  border-color: #111111;
+  box-shadow: 4px 4px 0 rgba(17, 17, 17, 0.9), 0 0 0 4px rgba(38, 240, 255, 0.18);
+}
+
+.glass-card::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+}
+
+.glass-card::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  transform: translateX(-130%);
+  background: linear-gradient(110deg, transparent 20%, rgba(255, 255, 255, 0.38) 48%, transparent 76%);
+  transition: transform 600ms ease;
+}
+
+.glass-card:hover::after {
+  transform: translateX(130%);
+}
+
+.section-shell {
+  scroll-margin-top: 112px;
+  padding-block: 12px;
+  min-width: 0;
+}
+
+.content-container {
+  width: min(100%, 1240px);
+  margin-inline: auto;
+}
+
+.anchor-offset {
+  scroll-margin-top: 112px;
+}
+
+.safe-grid {
+  display: grid;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.safe-grid > * {
+  min-width: 0;
+}
+
+.neo-card {
+  border: 3px solid #111111;
+  box-shadow: 7px 7px 0 rgba(17, 17, 17, 0.88);
+}
+
+.soft-grid {
+  background-image:
+    linear-gradient(rgba(17, 17, 17, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 17, 17, 0.05) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.ticker {
+  animation: ticker 24s linear infinite;
+}
+
+@keyframes ticker {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.pulse-dot {
+  animation: pulseDot 1.6s ease-in-out infinite;
+}
+
+@keyframes pulseDot {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 0.62;
+  }
+}
